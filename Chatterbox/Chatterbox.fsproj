@@ -7,11 +7,14 @@
       <Visible>False</Visible>
     </Compile>
     <Compile Include="Data\Context.fs" />
+    <Compile Include="Common\Helpers.fs" />
+    <Compile Include="Services\Subscriptions.fs" />
     <Compile Include="Handlers\HubHandler.fs" />
-    <Compile Include="Program.fs"/>
+    <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Falco" Version="5.*" />
+    <PackageReference Include="FsToolkit.ErrorHandling" Version="4.18.0" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
     <PackageReference Include="SqlHydra.Query" Version="3.0.1" />
   </ItemGroup>

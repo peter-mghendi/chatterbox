@@ -3,117 +3,79 @@ namespace Chatterbox.Handlers
 open System
 open System.Net
 open System.Text
-open Chatterbox.Data
-open Chatterbox.Data.Context
+open Chatterbox.Common.Helpers
+open Chatterbox.Services.Subscriptions
 open Falco
-open SqlHydra.Query
+open FsToolkit.ErrorHandling
+open Microsoft.FSharp.Core.Operators
 
 module HubHandler =
-    let DefaultLease = 7L * TimeSpan.SecondsPerDay
+    type ErrorResponse = { Error: string }
 
-    type Subscription =
-        { Callback: Uri
-          Topic: Uri
-          Lease: int64 option
-          Secret: byte array option }
+    [<Literal>]
+    let MaxSecretBytes = 200
 
-    let mutable subscriptions: Subscription list = []
+    let requireUri (key: string) (data: RequestData) =
+        data.TryGetStringNonEmpty key
+        |> Option.fold
+            (fun _ str ->
+                match Uri.TryCreate(str, UriKind.Absolute) with
+                | true, uri when [Uri.UriSchemeHttp; Uri.UriSchemeHttps] |> List.contains uri.Scheme -> Ok uri
+                | true,  _ -> Error $"'hub.{key}' must be a valid HTTP/HTTPS URI."
+                | false, _ -> Error $"'hub.{key}' must be a valid URI.")
+            (Error $"'hub.{key}' is required.")    
+  
+    let getPositiveInt64 (key: string) (data: RequestData) =
+        match data.TryGetInt64 key with
+        | Some value when value > 0L -> Ok(Some value)
+        | Some _ -> Error $"'hub.{key}' must be positive."
+        | None -> Ok None
 
-    let subscribe (request: Subscription) =
-        let grant =
-            match request.Lease with
-            | Some n -> n
-            | None -> DefaultLease
+    let getBytesOfMaxLength (length: int) (key: string) (data: RequestData) =
+        data.TryGetStringNonEmpty key
+        |> Option.map Encoding.UTF8.GetBytes
+        |> Option.fold
+            (fun _ bytes ->
+                match bytes.Length with
+                | n when n < length -> Ok(Some bytes)
+                | _ -> Error $"'hub.{key}' must be be less than {length} bytes in length.")
+            (Ok None)
 
-        let now = DateTime.UtcNow
-        let expiry = now + TimeSpan.FromSeconds(grant)
+    let parse (f: RequestData) =
+        result {
+            let! hub =
+                match f.TryGet "hub" with
+                | Some h -> Ok h
+                | None -> Error "'hub.' prefix must be present."
 
-        insertTask openContext {
-            for subscription in ``public``.subscriptions do
-                entity
-                    { ``public``.subscriptions.id = 0
-                      ``public``.subscriptions.identifier = Guid.CreateVersion7()
-                      ``public``.subscriptions.topic = request.Topic.ToString()
-                      ``public``.subscriptions.callback = request.Callback.ToString()
-                      ``public``.subscriptions.requested_lease_seconds = request.Lease
-                      ``public``.subscriptions.granted_lease_seconds = grant
-                      ``public``.subscriptions.secret = request.Secret
-                      ``public``.subscriptions.status = ``public``.subscription_status.pending
-                      ``public``.subscriptions.created_at = now
-                      ``public``.subscriptions.expires_at = expiry }
+            let! mode =
+                match hub.TryGetStringNonEmpty "mode" with
+                | Some "subscribe" -> Ok Subscribe
+                | Some "unsubscribe" -> Ok Unsubscribe
+                | Some _ -> Error "'hub.mode' must be either 'subscribe' or 'unsubscribe'."
+                | None -> Error "'hub.mode' is required."
 
-                getId subscription.id
+            let! callback = requireUri "callback" hub
+            let! topic = requireUri "topic" hub
+            let! lease = getPositiveInt64 "lease_seconds" hub
+            let! secret = getBytesOfMaxLength MaxSecretBytes "secret" hub
+
+            return
+                (mode,
+                 { Callback = callback
+                   Topic = topic
+                   Lease = lease
+                   Secret = secret })
         }
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-        |> fun id ->
-            id |> printfn "subscription %d created"
-            id
-        |> Ok
 
-    let unsubscribe (subscription: Subscription) =
-        match
-            (subscriptions
-             |> List.tryFindIndex (fun x ->
-                 x.Callback = subscription.Callback
-                 && x.Topic = subscription.Topic
-                 && x.Secret = subscription.Secret))
-        with
-        | Some index ->
-            subscriptions <- subscriptions |> List.removeAt index
-            index |> (int64 >> Ok)
-        | _ -> 0 |> (int64 >> Ok)
+    let dispatch =
+        function
+        | Subscribe -> subscribe
+        | Unsubscribe -> unsubscribe
 
     let handle: HttpHandler =
         Request.mapForm
-            (fun f ->
-                let hub =
-                    match f.TryGet "hub" with
-                    | Some j -> j
-                    | None -> failwith "'hub' object missing in form"
-
-                let callback =
-                    match hub.TryGetStringNonEmpty "callback" with
-                    | Some n -> Uri(n)
-                    | None -> failwith "hub.callback is required"
-
-                let topic =
-                    match hub.TryGetStringNonEmpty "topic" with
-                    | Some n -> Uri(n)
-                    | None -> failwith "hub.topic is required"
-
-                let lease =
-                    hub.TryGetInt64 "lease_seconds"
-                    |> Option.map (fun l ->
-                        if l > 0L then
-                            l
-                        else
-                            failwith "hub.lease_seconds must be positive")
-
-                let secret =
-                    hub.TryGetStringNonEmpty "secret"
-                    |> Option.map (fun n ->
-                        let bytes = Encoding.UTF8.GetBytes(n)
-
-                        if bytes.Length < 200 then
-                            bytes
-                        else
-                            failwith "hub.secret must be be less than 200 bytes in length.")
-
-                let request =
-                    { Callback = callback
-                      Topic = topic
-                      Lease = lease
-                      Secret = secret }
-
-                let result =
-                    request
-                    |> (fun r ->
-                        r
-                        |> match hub.GetStringNonEmpty "mode" with
-                           | "subscribe" -> subscribe
-                           | "unsubscribe" -> unsubscribe
-                           | _ -> failwith "unknown mode")
-
-                result)
-            (fun _ -> Response.withStatusCode (int HttpStatusCode.Accepted) >> Response.ofEmpty)
+            (parse >> Result.bind (uncurry dispatch))
+            (function
+            | Ok _ -> Response.withStatusCode (int HttpStatusCode.Accepted) >> Response.ofEmpty
+            | Error e -> Response.withStatusCode (int HttpStatusCode.BadRequest) >> Response.ofJson { Error = e })
