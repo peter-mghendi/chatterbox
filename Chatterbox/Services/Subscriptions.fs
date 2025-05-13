@@ -1,14 +1,19 @@
 namespace Chatterbox.Services
 
 open System
+open System.Threading.Tasks
+open SqlHydra.Query
+open Microsoft.FSharp.Core
+open Chatterbox.Common.Helpers
 open Chatterbox.Data
 open Chatterbox.Data.Context
-open SqlHydra.Query
+open Chatterbox.Data.HydraBuilders
+open Chatterbox.Data.``public``
 
 module Subscriptions =
     [<Literal>]
-    let DefaultLease = 7L * TimeSpan.SecondsPerDay
-    
+    let private DefaultLease = 7L * TimeSpan.SecondsPerDay
+
     type SubscriptionRequest =
         { Callback: Uri
           Topic: Uri
@@ -19,42 +24,59 @@ module Subscriptions =
         | Subscribe
         | Unsubscribe
 
-    let mutable subscriptions: SubscriptionRequest list = []
+    let private find (callback: Uri) (topic: Uri) =
+        selectTask openContext {
+            for subscription in subscriptions do
+                where (
+                    subscription.topic = topic.ToString()
+                    && subscription.callback = callback.ToString()
+                    && (isIn subscription.status [ subscription_status.pending; subscription_status.active ])
+                )
 
-    let subscribe (request: SubscriptionRequest) : Result<int64, string> =
+                tryHead
+        }
+
+    let private create (request: SubscriptionRequest) =
         let now = DateTime.UtcNow
         let grant = request.Lease |> Option.defaultValue DefaultLease
-        
+
         insertTask openContext {
-            for subscription in ``public``.subscriptions do
+            for subscription in subscriptions do
                 entity
-                    { ``public``.subscriptions.id = 0
-                      ``public``.subscriptions.identifier = Guid.CreateVersion7()
-                      ``public``.subscriptions.topic = request.Topic.ToString()
-                      ``public``.subscriptions.callback = request.Callback.ToString()
-                      ``public``.subscriptions.requested_lease_seconds = request.Lease
-                      ``public``.subscriptions.granted_lease_seconds = grant
-                      ``public``.subscriptions.secret = request.Secret
-                      ``public``.subscriptions.status = ``public``.subscription_status.pending
-                      ``public``.subscriptions.created_at = now
-                      ``public``.subscriptions.expires_at = now + TimeSpan.FromSeconds grant }
+                    { subscriptions.id = 0
+                      subscriptions.identifier = Guid.CreateVersion7()
+                      subscriptions.topic = request.Topic.ToString()
+                      subscriptions.callback = request.Callback.ToString()
+                      subscriptions.requested_lease_seconds = request.Lease
+                      subscriptions.granted_lease_seconds = grant
+                      subscriptions.secret = request.Secret
+                      subscriptions.status = subscription_status.pending
+                      subscriptions.created_at = now
+                      subscriptions.expires_at = now + TimeSpan.FromSeconds grant }
 
                 getId subscription.id
         }
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
-        |> Ok
 
-    let unsubscribe (subscription: SubscriptionRequest) : Result<int64, string> =
-        match
-            (subscriptions
-             |> List.tryFindIndex (fun x ->
-                 x.Callback = subscription.Callback
-                 && x.Topic = subscription.Topic
-                 && x.Secret = subscription.Secret))
-        with
-        | Some index ->
-            subscriptions <- subscriptions |> List.removeAt index
-            Ok index
-        | _ -> Ok -1    
+    let private delete (id: int64) =
+        updateTask openContext {
+            for subscription in subscriptions do
+                set subscription.status subscription_status.deleted
+                where (subscription.id = id)
+        }
 
+    let unsubscribe (request: SubscriptionRequest) : Task<Result<unit, string>> =
+        task {
+            let! existing = (request.Callback, request.Topic) |> uncurry find
+            existing |> Option.iter (fun row -> delete row.id |> Async.AwaitTask |> ignore)
+            return Ok()
+        }
+
+    let subscribe (request: SubscriptionRequest) : Task<Result<unit, string>> =
+        task {
+            let! result = request |> unsubscribe
+
+            return
+                result
+                |> Result.bind (fun _ -> (create request) |> Async.AwaitTask |> Ok)
+                |> Result.map (fun _ -> ())
+        }

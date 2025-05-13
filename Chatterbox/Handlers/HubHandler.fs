@@ -10,12 +10,12 @@ open FsToolkit.ErrorHandling
 open Microsoft.FSharp.Core.Operators
 
 module HubHandler =
-    type ErrorResponse = { Error: string }
+    type private ErrorResponse = { Error: string }
 
     [<Literal>]
-    let MaxSecretBytes = 200
+    let private MaxSecretBytes = 200
 
-    let requireUri (key: string) (data: RequestData) =
+    let private requireUri (key: string) (data: RequestData) =
         data.TryGetStringNonEmpty key
         |> Option.fold
             (fun _ str ->
@@ -25,13 +25,13 @@ module HubHandler =
                 | false, _ -> Error $"'hub.{key}' must be a valid URI.")
             (Error $"'hub.{key}' is required.")    
   
-    let getPositiveInt64 (key: string) (data: RequestData) =
+    let private getPositiveInt64 (key: string) (data: RequestData) =
         match data.TryGetInt64 key with
         | Some value when value > 0L -> Ok(Some value)
         | Some _ -> Error $"'hub.{key}' must be positive."
         | None -> Ok None
 
-    let getBytesOfMaxLength (length: int) (key: string) (data: RequestData) =
+    let private getBytesOfMaxLength (length: int) (key: string) (data: RequestData) =
         data.TryGetStringNonEmpty key
         |> Option.map Encoding.UTF8.GetBytes
         |> Option.fold
@@ -41,7 +41,7 @@ module HubHandler =
                 | _ -> Error $"'hub.{key}' must be be less than {length} bytes in length.")
             (Ok None)
 
-    let parse (f: RequestData) =
+    let private parse (f: RequestData) =
         result {
             let! hub =
                 match f.TryGet "hub" with
@@ -55,10 +55,10 @@ module HubHandler =
                 | Some _ -> Error "'hub.mode' must be either 'subscribe' or 'unsubscribe'."
                 | None -> Error "'hub.mode' is required."
 
-            let! callback = requireUri "callback" hub
-            let! topic = requireUri "topic" hub
-            let! lease = getPositiveInt64 "lease_seconds" hub
-            let! secret = getBytesOfMaxLength MaxSecretBytes "secret" hub
+            let! callback = hub |> requireUri "callback"
+            let! topic = hub |> requireUri "topic"
+            let! lease = hub |> getPositiveInt64 "lease_seconds"
+            let! secret = hub |> getBytesOfMaxLength MaxSecretBytes "secret"
 
             return
                 (mode,
@@ -68,14 +68,14 @@ module HubHandler =
                    Secret = secret })
         }
 
-    let dispatch =
+    let private dispatch =
         function
         | Subscribe -> subscribe
         | Unsubscribe -> unsubscribe
 
     let handle: HttpHandler =
         Request.mapForm
-            (parse >> Result.bind (uncurry dispatch))
+            (parse >> Result.bind (uncurry dispatch >> Async.AwaitTask >> Async.RunSynchronously))
             (function
             | Ok _ -> Response.withStatusCode (int HttpStatusCode.Accepted) >> Response.ofEmpty
             | Error e -> Response.withStatusCode (int HttpStatusCode.BadRequest) >> Response.ofJson { Error = e })
