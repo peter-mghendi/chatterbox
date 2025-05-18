@@ -7,13 +7,22 @@
       <Visible>False</Visible>
     </Compile>
     <Compile Include="Data\Context.fs" />
-    <Compile Include="Common\Helpers.fs" />
     <Compile Include="Services\Subscriptions.fs" />
+    <Compile Include="Requests\SubscriptionDenialRequest.fs" />
+    <Compile Include="Requests\IntentVerificationRequest.fs" />
+    <Compile Include="Services\SubscriptionNotification.fs" />
+    <Compile Include="Services\SubscriptionValidation.fs" />
+    <Compile Include="Services\IntentVerification.fs" />
+    <Compile Include="Workers\IntentVerificationWorker.fs" />
+    <Compile Include="Workers\SubscriptionValidationWorker.fs" />
+    <Compile Include="Workers\SubscriptionWorkflowOrchestrator.fs" />
+    <Compile Include="Services\SubscriptionService.fs" />
     <Compile Include="Handlers\HubHandler.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Falco" Version="5.*" />
+    <PackageReference Include="FsHttp" Version="15.0.1" />
     <PackageReference Include="FsToolkit.ErrorHandling" Version="4.18.0" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
     <PackageReference Include="SqlHydra.Query" Version="3.0.1" />

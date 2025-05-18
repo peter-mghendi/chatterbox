@@ -2,41 +2,49 @@ namespace Chatterbox.Services
 
 open System
 open System.Threading.Tasks
+open Chatterbox.Data.``public``
+open Chatterbox.Data.``public``
 open SqlHydra.Query
 open Microsoft.FSharp.Core
-open Chatterbox.Common.Helpers
-open Chatterbox.Data
 open Chatterbox.Data.Context
 open Chatterbox.Data.HydraBuilders
-open Chatterbox.Data.``public``
 
+[<RequireQualifiedAccess>]
 module Subscriptions =
     [<Literal>]
     let private DefaultLease = 7L * TimeSpan.SecondsPerDay
 
-    type SubscriptionRequest =
+    type Request =
         { Callback: Uri
           Topic: Uri
           Lease: int64 option
           Secret: byte array option }
 
-    type SubscriptionRequestMode =
+    type RequestMode =
         | Subscribe
         | Unsubscribe
 
-    let private find (callback: Uri) (topic: Uri) =
-        selectTask openContext {
-            for subscription in subscriptions do
-                where (
-                    subscription.topic = topic.ToString()
-                    && subscription.callback = callback.ToString()
-                    && (isIn subscription.status [ subscription_status.pending; subscription_status.active ])
-                )
+    let private transition status subscription =
+        match status with
+        | subscription_status.active ->
+            let expiry =
+                DateTime.UtcNow + TimeSpan.FromSeconds subscription.granted_lease_seconds
 
-                tryHead
-        }
+            updateTask openContext {
+                for s in subscriptions do
+                    set s.status status
+                    set s.expires_at expiry
+                    where (s.id = subscription.id)
+            }
+        | _ ->
+            updateTask openContext {
+                for s in subscriptions do
+                    set s.status status
+                    where (s.id = subscription.id)
+            }
+        :> Task
 
-    let private create (request: SubscriptionRequest) =
+    let create (request: Request) =
         let now = DateTime.UtcNow
         let grant = request.Lease |> Option.defaultValue DefaultLease
 
@@ -57,26 +65,31 @@ module Subscriptions =
                 getId subscription.id
         }
 
-    let private delete (id: int64) =
-        updateTask openContext {
+    let find id =
+        selectTask openContext {
             for subscription in subscriptions do
-                set subscription.status subscription_status.deleted
                 where (subscription.id = id)
+                head
         }
 
-    let unsubscribe (request: SubscriptionRequest) : Task<Result<unit, string>> =
-        task {
-            let! existing = (request.Callback, request.Topic) |> uncurry find
-            existing |> Option.iter (fun row -> delete row.id |> Async.AwaitTask |> ignore)
-            return Ok()
+    let lookup (statuses: subscription_status list) (callback: Uri, topic: Uri) =
+        selectTask openContext {
+            for subscription in subscriptions do
+                where (
+                    subscription.topic = topic.ToString()
+                    && subscription.callback = callback.ToString()
+                    && (isIn subscription.status statuses)
+                )
+
+                tryHead
         }
 
-    let subscribe (request: SubscriptionRequest) : Task<Result<unit, string>> =
-        task {
-            let! result = request |> unsubscribe
+    let approve subscription = subscription |> transition subscription_status.approved
 
-            return
-                result
-                |> Result.bind (fun _ -> (create request) |> Async.AwaitTask |> Ok)
-                |> Result.map (fun _ -> ())
-        }
+    let deny subscription = subscription |> transition subscription_status.denied
+
+    let activate subscription = subscription |> transition subscription_status.active
+
+    let reject subscription = subscription |> transition subscription_status.rejected
+
+    let delete subscription = subscription |> transition subscription_status.deleted

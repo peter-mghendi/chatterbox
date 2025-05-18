@@ -1,8 +1,11 @@
--- DROP TABLE IF EXISTS "subscriptions";
--- DROP TYPE IF EXISTS "subscription_status";
+DROP TABLE IF EXISTS "subscriptions";
+DROP TYPE IF EXISTS "subscription_status";
 
 CREATE TYPE "subscription_status" AS ENUM (
     'pending', 
+    'denied',
+    'approved',
+    'rejected',
     'active', 
     'deleted'
 );

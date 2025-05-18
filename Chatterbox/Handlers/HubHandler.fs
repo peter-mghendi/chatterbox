@@ -3,10 +3,12 @@ namespace Chatterbox.Handlers
 open System
 open System.Net
 open System.Text
-open Chatterbox.Common.Helpers
-open Chatterbox.Services.Subscriptions
+open Chatterbox.Services
+open Chatterbox.Services.SubscriptionService
+open Chatterbox.Workers
 open Falco
 open FsToolkit.ErrorHandling
+open Microsoft.Extensions.DependencyInjection
 open Microsoft.FSharp.Core.Operators
 
 module HubHandler =
@@ -20,11 +22,11 @@ module HubHandler =
         |> Option.fold
             (fun _ str ->
                 match Uri.TryCreate(str, UriKind.Absolute) with
-                | true, uri when [Uri.UriSchemeHttp; Uri.UriSchemeHttps] |> List.contains uri.Scheme -> Ok uri
-                | true,  _ -> Error $"'hub.{key}' must be a valid HTTP/HTTPS URI."
+                | true, uri when [ Uri.UriSchemeHttp; Uri.UriSchemeHttps ] |> List.contains uri.Scheme -> Ok uri
+                | true, _ -> Error $"'hub.{key}' must be a valid HTTP/HTTPS URI."
                 | false, _ -> Error $"'hub.{key}' must be a valid URI.")
-            (Error $"'hub.{key}' is required.")    
-  
+            (Error $"'hub.{key}' is required.")
+
     let private getPositiveInt64 (key: string) (data: RequestData) =
         match data.TryGetInt64 key with
         | Some value when value > 0L -> Ok(Some value)
@@ -41,7 +43,8 @@ module HubHandler =
                 | _ -> Error $"'hub.{key}' must be be less than {length} bytes in length.")
             (Ok None)
 
-    let private parse (f: RequestData) =
+    // https://www.w3.org/TR/websub/#subscriber-sends-subscription-request
+    let private parse (f: RequestData) : Result<Subscriptions.RequestMode * Subscriptions.Request, string> =
         result {
             let! hub =
                 match f.TryGet "hub" with
@@ -50,8 +53,8 @@ module HubHandler =
 
             let! mode =
                 match hub.TryGetStringNonEmpty "mode" with
-                | Some "subscribe" -> Ok Subscribe
-                | Some "unsubscribe" -> Ok Unsubscribe
+                | Some "subscribe" -> Ok Subscriptions.Subscribe
+                | Some "unsubscribe" -> Ok Subscriptions.Unsubscribe
                 | Some _ -> Error "'hub.mode' must be either 'subscribe' or 'unsubscribe'."
                 | None -> Error "'hub.mode' is required."
 
@@ -68,14 +71,23 @@ module HubHandler =
                    Secret = secret })
         }
 
-    let private dispatch =
-        function
-        | Subscribe -> subscribe
-        | Unsubscribe -> unsubscribe
-
     let handle: HttpHandler =
-        Request.mapForm
-            (parse >> Result.bind (uncurry dispatch >> Async.AwaitTask >> Async.RunSynchronously))
-            (function
-            | Ok _ -> Response.withStatusCode (int HttpStatusCode.Accepted) >> Response.ofEmpty
-            | Error e -> Response.withStatusCode (int HttpStatusCode.BadRequest) >> Response.ofJson { Error = e })
+        fun ctx ->
+            let orchestrator =
+                ctx.RequestServices.GetRequiredKeyedService<MailboxProcessor<WorkflowMessage>>("orchestrator")
+
+            Request.mapForm
+                (parse
+                 >> Result.bind (fun (mode, request) ->
+                     let handler =
+                         match mode with
+                         | Subscriptions.Subscribe -> subscribe
+                         | Subscriptions.Unsubscribe -> unsubscribe
+
+                     handler request orchestrator |> Async.AwaitTask |> Async.RunSynchronously))
+                (function
+                 | Ok _ -> Response.withStatusCode (int HttpStatusCode.Accepted) >> Response.ofEmpty
+                 | Error e ->
+                     Response.withStatusCode (int HttpStatusCode.BadRequest)
+                     >> Response.ofJson { Error = e })
+            <| ctx

@@ -54,8 +54,11 @@ module private DataReaderExtensions =
 module ``public`` =
     type subscription_status =
         | pending = 1
-        | active = 2
-        | deleted = 3
+        | denied = 2
+        | approved = 3
+        | rejected = 4
+        | active = 5
+        | deleted = 6
 
     [<CLIMutable>]
     type subscriptions =
