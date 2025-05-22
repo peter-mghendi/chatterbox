@@ -3,7 +3,7 @@ namespace Chatterbox.Services
 open System
 open System.Threading.Tasks
 open Chatterbox.Data.``public``
-open Chatterbox.Data.``public``
+open Chatterbox.Services.Security
 open SqlHydra.Query
 open Microsoft.FSharp.Core
 open Chatterbox.Data.Context
@@ -47,6 +47,7 @@ module Subscriptions =
     let create (request: Request) =
         let now = DateTime.UtcNow
         let grant = request.Lease |> Option.defaultValue DefaultLease
+        let secret = request.Secret |> Option.map encrypt
 
         insertTask openContext {
             for subscription in subscriptions do
@@ -57,7 +58,7 @@ module Subscriptions =
                       subscriptions.callback = request.Callback.ToString()
                       subscriptions.requested_lease_seconds = request.Lease
                       subscriptions.granted_lease_seconds = grant
-                      subscriptions.secret = request.Secret
+                      subscriptions.secret = secret
                       subscriptions.status = subscription_status.pending
                       subscriptions.created_at = now
                       subscriptions.expires_at = now + TimeSpan.FromSeconds grant }
@@ -84,12 +85,17 @@ module Subscriptions =
                 tryHead
         }
 
-    let approve subscription = subscription |> transition subscription_status.approved
+    let approve subscription =
+        subscription |> transition subscription_status.approved
 
-    let deny subscription = subscription |> transition subscription_status.denied
+    let deny subscription =
+        subscription |> transition subscription_status.denied
 
-    let activate subscription = subscription |> transition subscription_status.active
+    let activate subscription =
+        subscription |> transition subscription_status.active
 
-    let reject subscription = subscription |> transition subscription_status.rejected
+    let reject subscription =
+        subscription |> transition subscription_status.rejected
 
-    let delete subscription = subscription |> transition subscription_status.deleted
+    let delete subscription =
+        subscription |> transition subscription_status.deleted

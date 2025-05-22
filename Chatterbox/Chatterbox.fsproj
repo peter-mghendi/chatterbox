@@ -7,6 +7,7 @@
       <Visible>False</Visible>
     </Compile>
     <Compile Include="Data\Context.fs" />
+    <Compile Include="Services\Security.fs" />
     <Compile Include="Services\Subscriptions.fs" />
     <Compile Include="Requests\SubscriptionDenialRequest.fs" />
     <Compile Include="Requests\IntentVerificationRequest.fs" />
