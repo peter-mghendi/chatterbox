@@ -4,7 +4,7 @@ open Chatterbox.Data.``public``
 open Chatterbox.Services
 open FsHttp
 
-// https://www.w3.org/TR/websub/#hub-verifies-intent
+// https://www.w3.org/TR/websub/#hub-verif  ies-intent
 module IntentVerificationRequest =
     let build (mode: Subscriptions.RequestMode) (challenge: string) (subscription: subscriptions) =
         http {

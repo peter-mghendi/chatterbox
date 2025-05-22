@@ -2,7 +2,7 @@ namespace Chatterbox.Workers
 
 open Chatterbox.Services
 
-type Validation = Validate of int64 * AsyncReplyChannel<Result<unit, string option>>
+type Validation = Validate of  int64 * AsyncReplyChannel<Result<unit, string option>>
 
 [<RequireQualifiedAccess>]
 module SubscriptionValidationWorker =

@@ -2,7 +2,7 @@ namespace Chatterbox.Workers
 
 open Chatterbox.Services
 
-type Verification = Verify of int64 * Subscriptions.RequestMode * AsyncReplyChannel<Result<unit, string>>
+type Verification = Verify of Subscriptions.RequestMode * int64 * AsyncReplyChannel<Result<unit, string>>
 
 [<RequireQualifiedAccess>]  
 module IntentVerificationWorker =
@@ -11,7 +11,7 @@ module IntentVerificationWorker =
         MailboxProcessor<Verification>.Start(fun inbox ->
             let rec loop () =
                 async {
-                    let! Verify (id, mode, reply) = inbox.Receive()
+                    let! Verify (mode, id, reply) = inbox.Receive()
                     let! subscription = Subscriptions.find id |> Async.AwaitTask
                     let! result = IntentVerification.verify mode subscription |> Async.AwaitTask
                     

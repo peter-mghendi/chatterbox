@@ -9,7 +9,7 @@ module SubscriptionService =
     let unsubscribe (request: Subscriptions.Request) (orchestrator: MailboxProcessor<WorkflowMessage>) : Task<Result<unit, string>> =
         task {
             match! Subscriptions.lookup [ active ] (request.Callback, request.Topic) with
-            | Some subscription -> do! Subscriptions.delete subscription
+            | Some subscription -> orchestrator.Post (StartWorkflow (Subscriptions.Unsubscribe, subscription.id))
             | None -> ()
             
             return Ok ()
@@ -17,11 +17,11 @@ module SubscriptionService =
 
     let subscribe (request: Subscriptions.Request) (orchestrator: MailboxProcessor<WorkflowMessage>) : Task<Result<unit, string>> =
         task {
-            match! Subscriptions.lookup [ pending; approved ] (request.Callback, request.Topic) with
+            match! Subscriptions.lookup [ pending ] (request.Callback, request.Topic) with
             | Some subscription -> do! Subscriptions.delete subscription
             | None -> ()
-
+            
             let! id = Subscriptions.create request
-            orchestrator.Post (StartValidation id)
+            orchestrator.Post (StartWorkflow(Subscriptions.Subscribe, id))
             return Ok ()
         }
