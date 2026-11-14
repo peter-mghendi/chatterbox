@@ -23,3 +23,5 @@ CREATE TABLE IF NOT EXISTS "subscriptions" (
     "expires_at" timestamp with time zone NOT NULL,
     PRIMARY KEY ("id")
 );
+
+CREATE INDEX IF NOT EXISTS idx_topic ON subscriptions(topic);
